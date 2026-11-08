@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hello-k8s-html
+  namespace: demo
+data:
+  index.html: |
+    <!doctype html>
+    <html lang="fr">
+    <head><meta charset="utf-8"><title>Hello K8s</title></head>
+    <body style="font-family:sans-serif;text-align:center;margin-top:15vh">
+      <h1>Bonjour depuis Kubernetes 🚀 chez DSS</h1>
+      <p>Cette page est servie par nginx dans un pod.</p>
+      <p>Pod : <strong><!--# echo var="hostname" --></strong></p>
+      <p>IP du pod : <strong><!--# echo var="server_addr" --></strong></p>
+    </body>
+    </html>
+  default.conf: |
+    server {
+      listen 80;
+      location / {
+        root /usr/share/nginx/html;
+        index index.html;
+        ssi on;
+        add_header Cache-Control "no-store";
+      }
+    }
