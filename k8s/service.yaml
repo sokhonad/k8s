@@ -3,6 +3,8 @@ kind: Service
 metadata:
   name: hello-k8s
   namespace: demo
+  annotations:
+    link.argocd.argoproj.io/external-link: http://localhost:30080
 spec:
   type: NodePort
   selector:
