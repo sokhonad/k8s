@@ -1,0 +1,66 @@
+<%!
+    // Échappe le HTML pour éviter les injections (XSS)
+    static String esc(Object o) {
+        if (o == null) return "";
+        String s = o.toString();
+        StringBuilder b = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '<': b.append("&lt;"); break;
+                case '>': b.append("&gt;"); break;
+                case '&': b.append("&amp;"); break;
+                case '"': b.append("&quot;"); break;
+                case '\'': b.append("&#39;"); break;
+                default: b.append(c);
+            }
+        }
+        return b.toString();
+    }
+
+    static java.sql.Connection openDb(javax.servlet.ServletContext app) throws Exception {
+        Class.forName(app.getInitParameter("dbDriver"));
+        return java.sql.DriverManager.getConnection(
+            app.getInitParameter("dbUrl"),
+            app.getInitParameter("dbUsername"),
+            app.getInitParameter("dbPassword"));
+    }
+
+    static final String[] AVATAR_COLORS = {
+        "linear-gradient(135deg,#6366f1,#8b5cf6)",
+        "linear-gradient(135deg,#ec4899,#f43f5e)",
+        "linear-gradient(135deg,#0ea5e9,#6366f1)",
+        "linear-gradient(135deg,#10b981,#0ea5e9)",
+        "linear-gradient(135deg,#f59e0b,#ef4444)",
+        "linear-gradient(135deg,#8b5cf6,#ec4899)"
+    };
+
+    static String avatarColor(String name) {
+        return AVATAR_COLORS[Math.abs((name == null ? "" : name).hashCode()) % AVATAR_COLORS.length];
+    }
+
+    static String initials(String name) {
+        if (name == null || name.trim().isEmpty()) return "?";
+        String n = name.trim();
+        return esc(n.substring(0, Math.min(2, n.length())).toUpperCase());
+    }
+
+    static String nav(String active) {
+        return "<nav class=\"nav\"><div class=\"nav-inner\">"
+            + "<a class=\"brand\" href=\"./\"><span class=\"brand-logo\">"
+            + "<svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 2 2 7l10 5 10-5-10-5z\"/><path d=\"m2 17 10 5 10-5\"/><path d=\"m2 12 10 5 10-5\"/></svg>"
+            + "</span>MyWebApp</a>"
+            + "<div class=\"nav-links\">"
+            + "<a href=\"./\"" + ("home".equals(active) ? " class=\"active\"" : "") + ">Inscription</a>"
+            + "<a href=\"users.jsp\"" + ("users".equals(active) ? " class=\"active\"" : "") + ">Utilisateurs</a>"
+            + "</div></div></nav>";
+    }
+
+    static final String HEAD =
+        "<meta charset=\"utf-8\">"
+        + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        + "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">"
+        + "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>"
+        + "<link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap\" rel=\"stylesheet\">"
+        + "<link rel=\"stylesheet\" href=\"styles.css\">";
+%>

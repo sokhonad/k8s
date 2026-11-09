@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mywebapp
+  namespace: mywebapp
+  labels:
+    app: mywebapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mywebapp
+  template:
+    metadata:
+      labels:
+        app: mywebapp
+    spec:
+      initContainers:
+        # Télécharge le WAR depuis GitHub, le décompresse en application ROOT
+        # et applique les corrections nécessaires à Tomcat.
+        - name: fetch-war
+          image: alpine:3.20
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              wget -q -O /tmp/app.war "$WAR_URL"
+              mkdir -p /webapps/ROOT
+              cd /webapps/ROOT
+              unzip -q -o /tmp/app.war
+              cp /config/web.xml WEB-INF/web.xml
+              # Le pilote JDBC doit être dans tomcat/lib pour que DriverManager le trouve
+              mv WEB-INF/lib/postgresql-*.jar /extlib/postgresql.jar
+              # Design : remplace les pages du WAR
+              cp /ui/* .
+              echo "WAR prêt"
+          env:
+            - name: WAR_URL
+              value: https://raw.githubusercontent.com/sokhonad/k8s/main/MyWebAppv1.war
+          volumeMounts:
+            - name: webapps
+              mountPath: /webapps
+            - name: extlib
+              mountPath: /extlib
+            - name: config
+              mountPath: /config
+            - name: ui
+              mountPath: /ui
+      containers:
+        - name: tomcat
+          image: tomcat:9.0-jdk17-temurin
+          ports:
+            - containerPort: 8080
+          env:
+            - name: JAVA_OPTS
+              value: "-Xms128m -Xmx384m"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 15
+          volumeMounts:
+            - name: webapps
+              mountPath: /usr/local/tomcat/webapps
+            - name: extlib
+              mountPath: /usr/local/tomcat/lib/postgresql.jar
+              subPath: postgresql.jar
+        # Le WAR se connecte à localhost:5432 (codé en dur) :
+        # ce sidecar redirige ce port vers le Service postgres.
+        - name: db-proxy
+          image: alpine/socat:1.8.0.3
+          args:
+            - TCP-LISTEN:5432,fork,reuseaddr
+            - TCP:postgres:5432
+          resources:
+            requests:
+              cpu: 10m
+              memory: 8Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
+      volumes:
+        - name: webapps
+          emptyDir: {}
+        - name: extlib
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: mywebapp-config
+        - name: ui
+          configMap:
+            name: mywebapp-ui
