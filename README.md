@@ -1,8 +1,11 @@
-# hello-k8s
+# k8s : applications Kubernetes en GitOps
 
-Petite application web déployée sur **Kubernetes** et gérée en **GitOps** avec **ArgoCD**.
+Ce dépôt décrit deux applications déployées sur **Kubernetes** (Docker Desktop) et gérées en **GitOps** avec **ArgoCD** : tout changement poussé sur `main` est appliqué automatiquement dans le cluster.
 
-Un serveur **nginx** sert une page HTML qui affiche le **nom** et l'**IP du pod** qui a répondu, ce qui permet de voir la répartition de charge entre les pods.
+| Application | Technologie | URL | Dossier |
+|---|---|---|---|
+| **hello-k8s** | nginx + page statique | http://localhost:30080 | [k8s/](k8s/) |
+| **mywebapp** | WAR Java sur Tomcat 9 + PostgreSQL | http://localhost:30081 | [apps/mywebapp/](apps/mywebapp/) |
 
 ---
 
@@ -10,10 +13,9 @@ Un serveur **nginx** sert une page HTML qui affiche le **nom** et l'**IP du pod*
 
 - [Vue d'ensemble](#vue-densemble)
 - [Structure du dépôt](#structure-du-dépôt)
-- [Les ressources Kubernetes](#les-ressources-kubernetes)
-- [Comment nginx trouve la page](#comment-nginx-trouve-la-page)
-- [Parcours d'une requête](#parcours-dune-requête)
 - [Le déploiement GitOps avec ArgoCD](#le-déploiement-gitops-avec-argocd)
+- [Application 1 : hello-k8s](#application-1--hello-k8s)
+- [Application 2 : mywebapp](#application-2--mywebapp)
 - [Prérequis](#prérequis)
 - [Installation](#installation)
 - [Utilisation au quotidien](#utilisation-au-quotidien)
@@ -27,18 +29,22 @@ Un serveur **nginx** sert une page HTML qui affiche le **nom** et l'**IP du pod*
 ```mermaid
 flowchart LR
     dev([Développeur]) -- git push --> gh[(GitHub<br/>sokhonad/k8s)]
-    argo[ArgoCD] -- surveille le dossier k8s/ --> gh
-    argo -- applique les YAML --> cluster
+    argo[ArgoCD] -- surveille --> gh
+    argo -- applique --> ns1
+    argo -- applique --> ns2
 
     subgraph cluster[Cluster Kubernetes - Docker Desktop]
-        direction LR
-        svc[Service<br/>NodePort 30080] --> p1[Pod nginx #1]
-        svc --> p2[Pod nginx #2]
-        cm[(ConfigMap<br/>index.html + default.conf)] -.monté dans.-> p1
-        cm -.monté dans.-> p2
+        subgraph ns1[namespace demo]
+            s1[Service :30080] --> n[4 pods nginx]
+        end
+        subgraph ns2[namespace mywebapp]
+            s2[Service :30081] --> t[Pod Tomcat]
+            t --> pg[(PostgreSQL)]
+        end
     end
 
-    user([Navigateur]) -- http://localhost:30080 --> svc
+    user([Navigateur]) --> s1
+    user --> s2
 ```
 
 | Élément | Rôle |
@@ -46,9 +52,7 @@ flowchart LR
 | **GitHub** | Source de vérité : ce qui est dans le dépôt, c'est ce qui tourne dans le cluster |
 | **ArgoCD** | Compare Git au cluster et applique automatiquement les différences |
 | **Cluster** | Kubernetes à un nœud fourni par Docker Desktop (kubeadm) |
-| **Service** | Adresse stable et répartition de charge entre les pods |
-| **Pods** | 2 copies de nginx qui servent la page |
-| **ConfigMap** | Contient la page HTML et la configuration nginx |
+| **Namespaces** | Chaque application est isolée dans son propre espace (`demo`, `mywebapp`) |
 
 ---
 
@@ -57,148 +61,33 @@ flowchart LR
 ```
 .
 ├── README.md
+├── MyWebAppv1.war              # L'application Java (téléchargée par le pod au démarrage)
 ├── argocd/
-│   └── application.yaml     # Dit à ArgoCD quoi déployer et où
-└── k8s/
-    ├── kustomization.yaml   # Liste des fichiers à appliquer
-    ├── namespace.yaml       # Espace "demo"
-    ├── configmap.yaml       # Page HTML + config nginx
-    ├── deployment.yaml      # 2 pods nginx
-    └── service.yaml         # Accès sur le port 30080
+│   ├── application.yaml        # App ArgoCD "hello-k8s"  → dossier k8s/
+│   └── mywebapp.yaml           # App ArgoCD "mywebapp"   → dossier apps/mywebapp/
+├── k8s/                        # Application hello-k8s
+│   ├── kustomization.yaml
+│   ├── namespace.yaml
+│   ├── configmap.yaml          # Page HTML + config nginx
+│   ├── deployment.yaml         # 4 pods nginx
+│   └── service.yaml            # Port 30080
+└── apps/mywebapp/              # Application mywebapp
+    ├── kustomization.yaml      # Liste des fichiers + génération de la ConfigMap du design
+    ├── namespace.yaml
+    ├── postgres.yaml           # Base PostgreSQL + disque + table users
+    ├── configmap.yaml          # web.xml corrigé
+    ├── deployment.yaml         # Téléchargement du WAR + Tomcat + proxy base de données
+    ├── service.yaml            # Port 30081
+    └── ui/                     # Design de l'application (pages JSP + CSS)
+        ├── styles.css
+        ├── _common.jspf
+        ├── index.jsp
+        ├── users.jsp
+        ├── success.jsp
+        └── error.jsp
 ```
 
-> ArgoCD ne surveille que le dossier `k8s/`. Le fichier `argocd/application.yaml` s'applique une seule fois, à la main.
-
----
-
-## Les ressources Kubernetes
-
-```mermaid
-flowchart TB
-    subgraph ns[Namespace: demo]
-        dep[Deployment<br/>hello-k8s<br/>replicas: 2]
-        rs[ReplicaSet]
-        p1[Pod #1]
-        p2[Pod #2]
-        svc[Service<br/>hello-k8s]
-        cm[(ConfigMap<br/>hello-k8s-html)]
-
-        dep -- crée --> rs
-        rs -- crée et surveille --> p1
-        rs -- crée et surveille --> p2
-        svc -- "selector: app=hello-k8s" --> p1
-        svc -- "selector: app=hello-k8s" --> p2
-        cm -. volumes .-> p1
-        cm -. volumes .-> p2
-    end
-```
-
-| Fichier | Ressource | Ce qu'elle fait |
-|---|---|---|
-| [namespace.yaml](k8s/namespace.yaml) | `Namespace` | Isole l'app dans un espace `demo` |
-| [configmap.yaml](k8s/configmap.yaml) | `ConfigMap` | Stocke `index.html` (la page) et `default.conf` (config nginx) |
-| [deployment.yaml](k8s/deployment.yaml) | `Deployment` | Lance 2 pods `nginx:1.27-alpine`, avec limites CPU/RAM et sondes de santé |
-| [service.yaml](k8s/service.yaml) | `Service` | Expose les pods sur `localhost:30080` et répartit le trafic |
-| [kustomization.yaml](k8s/kustomization.yaml) | Kustomize | Regroupe les 4 fichiers pour `kubectl apply -k` |
-
-### Le lien entre les ressources : les labels
-
-Le Deployment et le Service retrouvent les pods grâce au label `app: hello-k8s`.
-
-```yaml
-# deployment.yaml : les pods reçoivent le label
-template:
-  metadata:
-    labels:
-      app: hello-k8s
-
-# service.yaml : le Service envoie le trafic aux pods qui portent ce label
-selector:
-  app: hello-k8s
-```
-
-### Santé des pods
-
-| Sonde | Fréquence | Si elle échoue |
-|---|---|---|
-| `readinessProbe` (`GET /`) | toutes les 5 s | Le pod ne reçoit **plus de trafic** |
-| `livenessProbe` (`GET /`) | toutes les 10 s | Le conteneur est **redémarré** |
-
----
-
-## Comment nginx trouve la page
-
-La page n'est **pas** dans l'image Docker : elle vient de la ConfigMap, montée comme un dossier dans le conteneur.
-
-```mermaid
-flowchart LR
-    subgraph cm[ConfigMap hello-k8s-html]
-        html[index.html]
-        conf[default.conf]
-    end
-
-    subgraph pod[Conteneur nginx]
-        d1["/usr/share/nginx/html/index.html"]
-        d2["/etc/nginx/conf.d/default.conf"]
-        nginx((nginx))
-    end
-
-    html -- "volume « html »" --> d1
-    conf -- "volume « nginx-conf »" --> d2
-    d2 -- "root /usr/share/nginx/html" --> nginx
-    d1 -- sert --> nginx
-```
-
-Cette liaison se fait dans [deployment.yaml](k8s/deployment.yaml), en deux étapes :
-
-```yaml
-# 1. La ConfigMap devient un volume
-volumes:
-  - name: html
-    configMap:
-      name: hello-k8s-html
-      items:
-        - key: index.html
-          path: index.html
-
-# 2. Le volume est monté dans le dossier que lit nginx
-volumeMounts:
-  - name: html                         # même nom que le volume
-    mountPath: /usr/share/nginx/html
-```
-
-### Afficher le nom du pod
-
-La config nginx active les **SSI** (Server Side Includes) avec `ssi on;`. nginx remplace alors ces balises au moment de servir la page :
-
-```html
-<!--# echo var="hostname" -->     → nom du pod (ex : hello-k8s-66d5fc4945-8kkjc)
-<!--# echo var="server_addr" -->  → IP du pod (ex : 10.1.0.8)
-```
-
-Dans Kubernetes, le *hostname* d'un conteneur est le nom de son pod.
-
----
-
-## Parcours d'une requête
-
-```mermaid
-sequenceDiagram
-    participant N as Navigateur
-    participant S as Service (NodePort 30080)
-    participant P1 as Pod nginx #1
-    participant P2 as Pod nginx #2
-
-    N->>S: GET http://localhost:30080
-    S->>P1: transmet la requête (port 80)
-    P1-->>N: page avec « Pod : ...-8kkjc »
-
-    N->>S: GET http://localhost:30080
-    S->>P2: transmet la requête
-    P2-->>N: page avec « Pod : ...-4vh7p »
-```
-
-> Un navigateur garde souvent sa connexion ouverte et retombe sur le même pod. Pour voir l'alternance, utilise une fenêtre privée ou `curl` (voir [Commandes utiles](#commandes-utiles)).
+> Les fichiers de `argocd/` s'appliquent une seule fois, à la main. Ensuite, ArgoCD surveille seul les dossiers `k8s/` et `apps/mywebapp/`.
 
 ---
 
@@ -212,45 +101,277 @@ Personne ne lance `kubectl apply` à la main : **on modifie Git, et ArgoCD met l
 sequenceDiagram
     actor D as Développeur
     participant G as GitHub
-    participant A as ArgoCD
-    participant K as Cluster
+    participant R as argocd-repo-server
+    participant C as argocd-application-controller
+    participant K as API Kubernetes
 
-    D->>G: git push (modifie k8s/configmap.yaml)
+    D->>G: git push
     loop toutes les ~3 min (ou bouton Refresh)
-        A->>G: lit le dossier k8s/ sur main
+        C->>R: dernier commit de main ?
+        R->>G: git ls-remote
+        G-->>R: nouveau SHA
+        R->>G: git fetch + kustomize build
+        R-->>C: YAML finaux
     end
-    A->>A: compare Git ↔ cluster → OutOfSync
-    A->>K: kubectl apply (sync automatique)
-    K-->>A: ressources à jour → Synced / Healthy
+    C->>K: compare avec l'état réel → OutOfSync
+    C->>K: apply (sync automatique)
+    K-->>C: Synced / Healthy
 ```
 
-### Configuration de l'application ArgoCD
+### Où ArgoCD applique les YAML
 
-[argocd/application.yaml](argocd/application.yaml) :
+Les YAML sont appliqués **depuis l'intérieur du cluster**, par deux pods du namespace `argocd` :
 
-| Champ | Valeur | Signification |
-|---|---|---|
-| `repoURL` | `https://github.com/sokhonad/k8s.git` | Dépôt à surveiller |
-| `targetRevision` | `main` | Branche suivie |
-| `path` | `k8s` | Dossier contenant les YAML |
-| `destination.namespace` | `demo` | Namespace cible |
-| `automated` | activé | Chaque push est déployé automatiquement |
-| `selfHeal: true` | activé | Annule les modifications faites à la main dans le cluster |
-| `prune: true` | activé | Supprime du cluster ce qui a été supprimé de Git |
-| `CreateNamespace=true` | activé | Crée le namespace s'il n'existe pas |
+| Pod | Rôle |
+|---|---|
+| `argocd-repo-server` | Clone le dépôt et génère les YAML (`kustomize build`) |
+| `argocd-application-controller` | Compare Git et le cluster, puis applique via l'API Kubernetes (`https://kubernetes.default.svc`) |
+
+### Les options de synchronisation
+
+Les deux applications ([argocd/application.yaml](argocd/application.yaml), [argocd/mywebapp.yaml](argocd/mywebapp.yaml)) utilisent les mêmes réglages :
+
+| Option | Effet |
+|---|---|
+| `automated` | Chaque push sur `main` est déployé automatiquement |
+| `selfHeal: true` | Annule les modifications faites à la main dans le cluster |
+| `prune: true` | Supprime du cluster ce qui a été supprimé de Git |
+| `CreateNamespace=true` | Crée le namespace s'il n'existe pas |
 
 ### Auto-réparation (selfHeal)
 
 ```mermaid
 flowchart LR
-    a["kubectl scale --replicas=5<br/>(modif manuelle)"] --> b[Cluster : 5 pods]
+    a["kubectl scale --replicas=10<br/>(modif manuelle)"] --> b[Cluster : 10 pods]
     b --> c{ArgoCD compare<br/>avec Git}
-    c -- "Git dit replicas: 2" --> d[OutOfSync]
+    c -- "Git dit replicas: 4" --> d[OutOfSync]
     d --> e[ArgoCD réapplique]
-    e --> f[Cluster : 2 pods ✅]
+    e --> f[Cluster : 4 pods ✅]
 ```
 
 > Conséquence : pour changer quoi que ce soit (nombre de pods, page, image…), il faut **passer par Git**.
+
+### Lien vers l'application dans ArgoCD
+
+Chaque Service porte une annotation qui ajoute une icône **↗** dans l'interface ArgoCD :
+
+```yaml
+metadata:
+  annotations:
+    link.argocd.argoproj.io/external-link: http://localhost:30080
+```
+
+---
+
+## Application 1 : hello-k8s
+
+Un serveur **nginx** sert une page HTML qui affiche le **nom** et l'**IP du pod** qui a répondu, ce qui permet de voir la répartition de charge.
+
+### Les ressources
+
+```mermaid
+flowchart TB
+    subgraph ns[Namespace: demo]
+        dep[Deployment<br/>hello-k8s<br/>replicas: 4]
+        rs[ReplicaSet]
+        pods[4 pods nginx]
+        svc[Service NodePort<br/>30080]
+        cm[(ConfigMap<br/>hello-k8s-html)]
+
+        dep -- crée --> rs
+        rs -- crée et surveille --> pods
+        svc -- "selector: app=hello-k8s" --> pods
+        cm -. volumes .-> pods
+    end
+```
+
+| Fichier | Ressource | Ce qu'elle fait |
+|---|---|---|
+| [namespace.yaml](k8s/namespace.yaml) | `Namespace` | Isole l'app dans `demo` |
+| [configmap.yaml](k8s/configmap.yaml) | `ConfigMap` | Contient `index.html` (la page) et `default.conf` (config nginx) |
+| [deployment.yaml](k8s/deployment.yaml) | `Deployment` | 4 pods `nginx:1.27-alpine`, avec limites CPU/RAM et sondes de santé |
+| [service.yaml](k8s/service.yaml) | `Service` | Expose les pods sur `localhost:30080` et répartit le trafic |
+
+### Comment nginx trouve la page
+
+La page n'est **pas** dans l'image Docker : elle vient de la ConfigMap, montée comme un dossier dans le conteneur.
+
+```mermaid
+flowchart LR
+    subgraph cm[ConfigMap hello-k8s-html]
+        html[index.html]
+        conf[default.conf]
+    end
+    subgraph pod[Conteneur nginx]
+        d1["/usr/share/nginx/html/index.html"]
+        d2["/etc/nginx/conf.d/default.conf"]
+        nginx((nginx))
+    end
+    html -- "volume « html »" --> d1
+    conf -- "volume « nginx-conf »" --> d2
+    d2 -- "root /usr/share/nginx/html" --> nginx
+    d1 -- sert --> nginx
+```
+
+```yaml
+# deployment.yaml
+volumes:
+  - name: html
+    configMap:
+      name: hello-k8s-html
+      items:
+        - key: index.html
+          path: index.html
+volumeMounts:
+  - name: html                         # même nom que le volume
+    mountPath: /usr/share/nginx/html
+```
+
+### Afficher le nom du pod
+
+La config nginx active les **SSI** (`ssi on;`). nginx remplace ces balises au moment de servir la page :
+
+```html
+<!--# echo var="hostname" -->     → nom du pod
+<!--# echo var="server_addr" -->  → IP du pod
+```
+
+### Parcours d'une requête
+
+```mermaid
+sequenceDiagram
+    participant N as Navigateur
+    participant S as Service (NodePort 30080)
+    participant P1 as Pod nginx #1
+    participant P2 as Pod nginx #2
+
+    N->>S: GET http://localhost:30080
+    S->>P1: transmet (port 80)
+    P1-->>N: page « Pod : ...-8kkjc »
+    N->>S: GET http://localhost:30080
+    S->>P2: transmet
+    P2-->>N: page « Pod : ...-4vh7p »
+```
+
+---
+
+## Application 2 : mywebapp
+
+Application web Java ([MyWebAppv1.war](MyWebAppv1.war)) : inscription d'utilisateurs et liste des membres, stockés dans **PostgreSQL**.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    gh[(GitHub<br/>MyWebAppv1.war)] -- ① téléchargé au démarrage --> init
+
+    subgraph ns[Namespace: mywebapp]
+        subgraph pod[Pod mywebapp]
+            init[fetch-war<br/>initContainer] -- ② décompresse + corrige --> tc
+            tc[Tomcat 9<br/>:8080] -- localhost:5432 --> proxy[db-proxy<br/>socat]
+        end
+        proxy -- ③ --> svcpg[Service postgres]
+        svcpg --> pg[(PostgreSQL 16)]
+        pg --- pvc[(Disque 1 Gi<br/>PVC)]
+    end
+
+    user([Navigateur]) -- localhost:30081 --> tc
+```
+
+| Conteneur | Rôle |
+|---|---|
+| `fetch-war` (initContainer) | Télécharge le WAR depuis GitHub, le décompresse comme application `ROOT`, applique les corrections et le design |
+| `tomcat` | Exécute l'application Java |
+| `db-proxy` | Redirige `localhost:5432` vers le Service `postgres` |
+| `postgres` (autre pod) | Stocke les utilisateurs sur un disque persistant |
+
+### Analyse du WAR et corrections appliquées
+
+Le fichier WAR n'est **pas modifié** : toutes les corrections sont faites au démarrage par l'initContainer.
+
+| Constat dans le WAR | Problème | Correction |
+|---|---|---|
+| Compilé en Java 8, utilise `javax.servlet` | Incompatible avec Tomcat 10+ (`jakarta`) | Image `tomcat:9.0-jdk17-temurin` |
+| Connexion en dur à `localhost:5432`, utilisateur `userdb` | La base n'est pas dans le même conteneur | Sidecar `socat` dans le pod + identifiants identiques dans [postgres.yaml](apps/mywebapp/postgres.yaml) |
+| `web.xml` en version 2.3 | Tomcat ignore les `@WebServlet` → servlets en **404** | `web.xml` 4.0 fourni par [configmap.yaml](apps/mywebapp/configmap.yaml) |
+| Pilote PostgreSQL dans `WEB-INF/lib` | `DriverManager` ne le trouve pas (*No suitable driver*) | Déplacé dans `tomcat/lib` |
+| `date_of_birth` envoyé avec `setString()` | Refusé par une colonne de type `DATE` | Colonne `VARCHAR(20)` |
+| Redirection vers `error.jsp` en cas d'erreur | La page n'existe pas dans le WAR | Ajoutée dans `ui/` |
+| `success.jsp` affiche le nom sans échappement | Faille **XSS** | Nom échappé dans la nouvelle page |
+
+### Le démarrage du pod
+
+```mermaid
+sequenceDiagram
+    participant I as initContainer fetch-war
+    participant G as GitHub
+    participant V as Volume webapps
+    participant T as Tomcat
+
+    I->>G: wget MyWebAppv1.war
+    I->>V: unzip → webapps/ROOT
+    I->>V: remplace WEB-INF/web.xml
+    I->>V: déplace le pilote PostgreSQL vers tomcat/lib
+    I->>V: copie les pages du design (ui/)
+    Note over I: « WAR prêt » → l'initContainer s'arrête
+    T->>V: démarre et déploie ROOT
+    Note over T: readinessProbe OK → reçoit le trafic
+```
+
+### Le design
+
+Les pages de l'interface sont dans [apps/mywebapp/ui/](apps/mywebapp/ui/) et sont compilées par Tomcat au premier accès.
+
+| Fichier | Page |
+|---|---|
+| [index.jsp](apps/mywebapp/ui/index.jsp) | Accueil : accroche, compteurs en direct (membres, villes), formulaire d'inscription |
+| [users.jsp](apps/mywebapp/ui/users.jsp) | Liste des membres avec avatars et recherche instantanée |
+| [success.jsp](apps/mywebapp/ui/success.jsp) | Confirmation d'inscription |
+| [error.jsp](apps/mywebapp/ui/error.jsp) | Page d'erreur |
+| [_common.jspf](apps/mywebapp/ui/_common.jspf) | Code partagé : échappement HTML, connexion à la base, barre de navigation |
+| [styles.css](apps/mywebapp/ui/styles.css) | Styles, avec mode sombre automatique et affichage mobile |
+
+L'inscription passe toujours par le servlet d'origine `InsertUserServlet`.
+
+#### Mise à jour automatique du design
+
+[kustomization.yaml](apps/mywebapp/kustomization.yaml) génère la ConfigMap du design avec `configMapGenerator`. Son nom contient une empreinte du contenu (ex : `mywebapp-ui-k77fhthbgd`) :
+
+```mermaid
+flowchart LR
+    a[Modification<br/>d'un fichier ui/] --> b[git push]
+    b --> c[Nouveau nom :<br/>mywebapp-ui-xxxxx]
+    c --> d[Le Deployment change]
+    d --> e[Kubernetes recrée le pod<br/>avec le nouveau design]
+```
+
+### Parcours d'une inscription
+
+```mermaid
+sequenceDiagram
+    participant N as Navigateur
+    participant T as Tomcat
+    participant S as InsertUserServlet
+    participant P as PostgreSQL
+
+    N->>T: GET / (index.jsp)
+    T->>P: SELECT COUNT(*) (compteurs)
+    T-->>N: page d'accueil
+    N->>S: POST /InsertUserServlet
+    S->>P: INSERT INTO users
+    S-->>N: 302 → success.jsp?username=...
+    N->>T: GET users.jsp
+    T->>P: SELECT ... FROM users
+    T-->>N: liste des membres
+```
+
+### Les données
+
+- La table `users` est créée au premier démarrage de PostgreSQL par le script de la ConfigMap `postgres-init`.
+- Les données sont sur un **PersistentVolumeClaim** de 1 Gi : elles survivent au redémarrage des pods.
+- Les identifiants (`userdb` / `mywebapp`) sont imposés par le WAR et stockés dans le Secret `postgres`.
+
+> ⚠️ Le mot de passe de la base est écrit en clair dans le WAR, donc visible dans ce dépôt public. À corriger dans le code Java avant toute mise en production.
 
 ---
 
@@ -297,67 +418,74 @@ kubectl -n argocd port-forward svc/argocd-server 8080:443
 
 Ouvrir **https://localhost:8080** (accepter l'avertissement de certificat) et se connecter en `admin`.
 
-### 4. Déclarer l'application
+### 4. Déclarer les applications
 
 ```powershell
-kubectl apply -f argocd/application.yaml
+kubectl apply -f argocd/application.yaml   # hello-k8s
+kubectl apply -f argocd/mywebapp.yaml      # mywebapp
 ```
 
-L'application **hello-k8s** apparaît dans ArgoCD et passe à **Synced / Healthy**.
+Les deux applications apparaissent dans ArgoCD et passent à **Synced / Healthy**. Pour mywebapp, le premier démarrage prend quelques minutes (téléchargement des images Tomcat et PostgreSQL).
 
 ### 5. Tester
 
-Ouvrir **http://localhost:30080**.
+- hello-k8s : **http://localhost:30080**
+- mywebapp : **http://localhost:30081**
 
-> **Sans ArgoCD**, on peut aussi déployer directement : `kubectl apply -k k8s`
+> **Sans ArgoCD**, on peut aussi déployer directement : `kubectl apply -k k8s` et `kubectl apply -k apps/mywebapp`
 
 ---
 
 ## Utilisation au quotidien
 
-### Modifier l'application
+### Modifier une application
 
 ```powershell
-# 1. Modifier un fichier dans k8s/ (ex : le titre dans configmap.yaml)
+# 1. Modifier un fichier dans k8s/ ou apps/mywebapp/
 # 2. Pousser
-git commit -am "Nouveau titre"
+git add .
+git commit -m "Description du changement"
 git push
 # 3. Dans ArgoCD : bouton Refresh (sinon détection en ~3 min)
 ```
 
-> Quand seule la ConfigMap change, nginx peut mettre jusqu'à une minute à voir la nouvelle page. Pour l'afficher tout de suite : **Restart** sur le Deployment dans ArgoCD, ou
-> `kubectl -n demo rollout restart deployment/hello-k8s`
-
-### Changer le nombre de pods
-
-Modifier `replicas` dans [deployment.yaml](k8s/deployment.yaml), puis `git commit` et `git push`.
+| Changement | Redémarrage des pods |
+|---|---|
+| Design de mywebapp (`apps/mywebapp/ui/`) | Automatique |
+| Page de hello-k8s (`k8s/configmap.yaml`) | nginx peut mettre ~1 min à la voir. Pour forcer : **Restart** dans ArgoCD |
+| Nouveau WAR avec le même nom | Manuel : **Restart** du Deployment `mywebapp` |
+| Nouveau WAR avec un autre nom | Modifier `WAR_URL` dans [deployment.yaml](apps/mywebapp/deployment.yaml) → automatique |
+| Nombre de pods (`replicas`) | Automatique |
 
 ---
 
 ## Commandes utiles
 
 ```powershell
-# État de l'application
-kubectl -n demo get pods,svc -o wide
+# État général
+kubectl get pods -A
 kubectl -n argocd get applications
 
-# Voir quel pod répond (6 requêtes)
+# hello-k8s : voir quel pod répond
 1..6 | % { (curl.exe -s http://localhost:30080) -match "Pod : <strong>(.*?)</strong>" | Out-Null; $Matches[1] }
 
-# Logs nginx
-kubectl -n demo logs deploy/hello-k8s
+# mywebapp : logs
+kubectl -n mywebapp logs deploy/mywebapp -c fetch-war    # téléchargement du WAR
+kubectl -n mywebapp logs deploy/mywebapp -c tomcat       # Tomcat
+kubectl -n mywebapp logs deploy/postgres                 # PostgreSQL
 
-# Regarder les fichiers montés dans un pod
-kubectl -n demo exec deploy/hello-k8s -- cat /usr/share/nginx/html/index.html
-kubectl -n demo exec deploy/hello-k8s -- cat /etc/nginx/conf.d/default.conf
+# mywebapp : consulter la base
+kubectl -n mywebapp exec deploy/postgres -- psql -U userdb -d mywebapp -c "select * from users;"
+
+# Ouvrir un shell dans un conteneur
+kubectl -n demo exec -it deploy/hello-k8s -- sh
+kubectl -n mywebapp exec -it deploy/mywebapp -c tomcat -- bash
 
 # Tester l'auto-réparation : supprimer un pod, Kubernetes en recrée un
 kubectl -n demo delete pod <nom-du-pod>
-kubectl -n demo get pods
 
 # Tout supprimer
-kubectl -n argocd delete application hello-k8s   # avec ArgoCD
-kubectl delete -k k8s                            # sans ArgoCD
+kubectl -n argocd delete application hello-k8s mywebapp
 ```
 
 ---
@@ -368,9 +496,12 @@ kubectl delete -k k8s                            # sans ArgoCD
 |---|---|---|
 | Docker : *Virtual Machine Platform not enabled* | Composant Windows manquant | Voir [Prérequis](#prérequis), puis redémarrer |
 | `current-context is not set` | Kubernetes non activé dans Docker Desktop | Settings → Kubernetes → Enable |
-| `localhost:30080` refuse la connexion juste après le déploiement | Le port NodePort n'est pas encore ouvert | Attendre quelques secondes |
+| Port 30080 ou 30081 refuse la connexion juste après un déploiement | Le port n'est pas encore ouvert, ou Tomcat démarre encore | Attendre quelques secondes |
 | `argocd-initial-admin-secret not found` | ArgoCD n'a pas fini de démarrer | Attendre que `argocd-server` soit `Running` |
 | `argocd-dex-server` en `Error` : *server.secretkey is missing* | Dex a démarré avant le serveur | Il redémarre seul ; non bloquant pour la connexion `admin` |
 | ArgoCD : *authentication required: Repository not found* | Dépôt GitHub privé | Rendre le dépôt public, ou l'ajouter avec un token dans Settings → Repositories |
-| Ancienne page affichée après un push | nginx n'a pas encore relu la ConfigMap | Restart du Deployment |
-| Le nombre de pods revient tout seul à 2 | `selfHeal` d'ArgoCD | Normal : modifier `replicas` dans Git |
+| Une application n'apparaît pas dans ArgoCD | Fichiers non poussés ou Application non déclarée | `git push`, puis `kubectl apply -f argocd/<app>.yaml` |
+| Pod mywebapp bloqué en `Init` | Le téléchargement du WAR échoue | `kubectl -n mywebapp logs deploy/mywebapp -c fetch-war` |
+| mywebapp : page d'erreur à l'inscription | PostgreSQL indisponible | Vérifier `kubectl -n mywebapp get pods` et les logs `postgres` |
+| Ancienne page affichée (hello-k8s) | nginx n'a pas encore relu la ConfigMap | Restart du Deployment |
+| Le nombre de pods revient tout seul | `selfHeal` d'ArgoCD | Normal : modifier `replicas` dans Git |
