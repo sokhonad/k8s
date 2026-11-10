@@ -7,6 +7,8 @@ Ce dépôt décrit deux applications déployées sur **Kubernetes** (Docker Desk
 | **hello-k8s** | nginx + page statique | http://localhost:30080 | [k8s/](k8s/) |
 | **mywebapp** | WAR Java sur Tomcat 9 + PostgreSQL | http://localhost:30081 | [apps/mywebapp/](apps/mywebapp/) |
 
+> 🎓 Pour apprendre à tout reconstruire pas à pas : [12 exercices guidés](exercices/README.md).
+
 ---
 
 ## Sommaire
