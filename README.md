@@ -429,6 +429,67 @@ kubectl apply -f argocd/mywebapp.yaml      # mywebapp
 
 Les deux applications apparaissent dans ArgoCD et passent à **Synced / Healthy**. Pour mywebapp, le premier démarrage prend quelques minutes (téléchargement des images Tomcat et PostgreSQL).
 
+#### Autre méthode : créer l'application depuis l'interface ArgoCD
+
+Au lieu de `kubectl apply`, on peut créer une application à la main depuis https://localhost:8080 → **+ NEW APP**.
+
+> ⚠️ N'utilisez qu'**une seule** méthode par application : deux applications qui gèrent les mêmes ressources se battent entre elles.
+
+**Champs à remplir** (exemple pour hello-k8s) :
+
+| Section | Champ | Valeur |
+|---|---|---|
+| GENERAL | Application Name | `hello-k8s` |
+| GENERAL | Project Name | `default` |
+| GENERAL | Sync Policy | `Automatic` |
+| SOURCE | Repository URL | `https://github.com/sokhonad/k8s.git` (**HTTPS**, pas `git@github.com:…`) |
+| SOURCE | Revision | `HEAD` ou `main` |
+| SOURCE | Path | `k8s` (ou `apps/mywebapp` pour mywebapp) |
+| DESTINATION | Cluster URL | `https://kubernetes.default.svc` (`in-cluster` dans la liste) |
+| DESTINATION | Namespace | `demo` (ou `mywebapp`) |
+| KUSTOMIZE | *(tous les champs)* | Ne rien changer : ArgoCD détecte `kustomization.yaml` tout seul |
+
+Cliquez ensuite sur **CREATE**.
+
+**Les cases de la Sync Policy** : quand ArgoCD déploie
+
+| Case | Effet | Conseil |
+|---|---|---|
+| **Enable Auto-Sync** | Déploie automatiquement chaque nouveau commit. Sinon, ArgoCD attend un clic sur **Sync** | ✅ |
+| **Prune Resources** | Supprime du cluster une ressource retirée de Git | ✅ |
+| **Self Heal** | Annule les modifications faites à la main dans le cluster | ✅ |
+| **Set Deletion Finalizer** | Supprimer l'application dans ArgoCD supprime aussi ses pods, services… Sans cette case, ils continuent de tourner | ✅ |
+
+**Les Sync Options** : comment ArgoCD applique
+
+| Case | Effet | Conseil |
+|---|---|---|
+| **Skip Schema Validation** | Désactive la vérification du format des YAML | ❌ |
+| **Auto-Create Namespace** | Crée le namespace de destination s'il n'existe pas | ✅ |
+| **Apply Out of Sync Only** | Ne réapplique que les ressources modifiées (utile pour les grosses applications) | Facultatif |
+| **Respect Ignore Differences** | Tient compte des champs déclarés dans `ignoreDifferences` | ❌ |
+| **Server-Side Apply** | Fait appliquer les YAML par le serveur Kubernetes (utile pour les très gros fichiers) | Facultatif |
+| **Prune Last** | Fait les suppressions à la fin de la synchronisation, après les créations | Facultatif |
+| **Replace** | Écrase les ressources (`kubectl replace`) au lieu de les mettre à jour : elles peuvent être supprimées puis recréées | ❌ |
+| **Retry** | Réessaie automatiquement une synchronisation qui a échoué | ✅ |
+
+**Prune Propagation Policy** : ce qui arrive aux ressources « enfants » lors d'une suppression
+
+| Valeur | Effet |
+|---|---|
+| **foreground** (conseillé) | Supprime d'abord les pods, puis le Deployment |
+| **background** | Supprime le Deployment tout de suite, Kubernetes nettoie les pods ensuite |
+| **orphan** | Supprime le Deployment mais laisse les pods en vie |
+
+**Réglage conseillé :**
+
+```
+✅ Enable Auto-Sync      ✅ Prune Resources      ✅ Self Heal
+✅ Set Deletion Finalizer ✅ Auto-Create Namespace ✅ Retry
+   Prune Propagation Policy : foreground
+   Tout le reste : décoché
+```
+
 ### 5. Tester
 
 - hello-k8s : **http://localhost:30080**
@@ -502,6 +563,8 @@ kubectl -n argocd delete application hello-k8s mywebapp
 | `argocd-initial-admin-secret not found` | ArgoCD n'a pas fini de démarrer | Attendre que `argocd-server` soit `Running` |
 | `argocd-dex-server` en `Error` : *server.secretkey is missing* | Dex a démarré avant le serveur | Il redémarre seul ; non bloquant pour la connexion `admin` |
 | ArgoCD : *authentication required: Repository not found* | Dépôt GitHub privé | Rendre le dépôt public, ou l'ajouter avec un token dans Settings → Repositories |
+| Création depuis l'interface : *SSH agent requested but SSH_AUTH_SOCK not-specified* | Adresse SSH du dépôt (`git@github.com:…`) utilisée sans clé SSH | Utiliser l'adresse HTTPS `https://github.com/sokhonad/k8s.git`. Si l'adresse SSH revient, la supprimer dans Settings → Repositories |
+| Une application supprimée dans ArgoCD laisse ses pods en place | Case **Set Deletion Finalizer** non cochée | Supprimer les ressources à la main (`kubectl delete -k <dossier>`), et cocher la case à la prochaine création |
 | Une application n'apparaît pas dans ArgoCD | Fichiers non poussés ou Application non déclarée | `git push`, puis `kubectl apply -f argocd/<app>.yaml` |
 | Pod mywebapp bloqué en `Init` | Le téléchargement du WAR échoue | `kubectl -n mywebapp logs deploy/mywebapp -c fetch-war` |
 | mywebapp : page d'erreur à l'inscription | PostgreSQL indisponible | Vérifier `kubectl -n mywebapp get pods` et les logs `postgres` |
